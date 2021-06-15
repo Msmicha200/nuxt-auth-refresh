@@ -32,7 +32,6 @@ export default class Auth {
             this.options[option].userAutoFetch = options.strategies[option].userAutoFetch === true ? true : false;
         }
 
-
         this.state = new Vue({
             data: this.state
         });
@@ -40,7 +39,6 @@ export default class Auth {
         this.init();
     }
     
-
     // Review
     init() {
         const cookies = this.getCookies();
@@ -52,8 +50,9 @@ export default class Auth {
                 const token = cookies[array.join('.')];
 
                 if (array[1] in this.state) {
-                    if (this.isExpired(token))
-                        return false;
+                    if (this.isExpired(token)) {
+                        // 
+                    }
 
                     this.state[array[1]][array[2]] = token;
                     this.state[array[1]].loggedIn = true;
@@ -62,6 +61,11 @@ export default class Auth {
         }
     }
 
+    /**
+     * @param  {String} scheme_name Strategie title to login with.
+     * @param  {Object} data Object with data to login.
+     * @returns {Promise} Promise object represents the result of request to login endpoint.
+     */
     async loginWith(scheme_name, data = false) {
         if (!(scheme_name in this.options)) {
             return Promise.reject('Please provide correct strategie name');
@@ -122,14 +126,29 @@ export default class Auth {
             }
         }
 
+        if (this.options[scheme_name].userAutoFetch) {
+            this.fetchUser(scheme_name);
+        }
+
         return Promise.resolve(result);
     }
 
+    /**
+     * @param  {String} scheme_name Strategie title to logout
+     */
+    logOut(scheme_name) {
+        
+    }
+
+    /**
+     * @param  {String} scheme_name Strategie title to fetch user.
+     * @returns {Promise} Promise object represents the result of fetch user.
+     */
     async fetchUser(scheme_name) {
         const user_endpoint = this.options[scheme_name].endpoints?.user;
-
+        
         if (!user_endpoint) {
-            return Promise.rejece('Please provide user endpoint');
+            return Promise.reject('Please provide user endpoint');
         }
 
         if (!user_endpoint.url) {
@@ -140,7 +159,8 @@ export default class Auth {
             return Promise.reject('Please provide user endpoint property');
         }
 
-        const user = await this.request(user_endpoint.url, {
+        const user = await this.request({
+            url: user_endpoint.url,
             method: user_endpoint.method || 'GET'
         });
 
@@ -153,6 +173,10 @@ export default class Auth {
         return Promise.resolve(user);
     }
 
+    /**
+     * @param  {String} scheme_name Strategie title to check refresh possibility.
+     * @returns {Boolean} Returns true if it is possible to refresh provided strategie.
+     */
     isRefreshable(scheme_name) {
         if (!(scheme_name in this.options)) {
             return false;
@@ -176,10 +200,14 @@ export default class Auth {
         
         return true;
     }
-
+    
+    /**
+     * @param  {String} token
+     * @returns {Boolean} Returns true if provided token is expired.
+     */
     isExpired(token) {
         const token_obj = jwt(token);
-
+        
         if ('exp' in token_obj) {
             return Date.now() > token_obj.exp * 1000;
         }
@@ -188,6 +216,11 @@ export default class Auth {
         }
     }
 
+    /**
+     * @param  {String} key Title of cookie to set.
+     * @param  {String} value Cookie value to set.
+     * @param  {Object} options Cookie options.
+     */
     setCookie(key, value, options = {}) {
         if (value == false) {
             options.maxAge = -1;
@@ -212,16 +245,26 @@ export default class Auth {
         }
     }
 
+    /**
+     * @returns {Object} Returns all cookies.
+     */
     getCookies() {
         const cookie_str = process.client ? document.cookie : this.ctx.req.headers.cookie;
 
         return cookie.parse(cookie_str || '');
     }
 
+    /**
+     * @param {Object} options Config of request to send.
+     * @param {String} options.url Endpoint to request.
+     * @param {String} options.method Method to request.
+     * @param {Object} options.data Request body.
+     * @returns {Promise} Promise object represents response of sended request.
+     */
     request(options) {
         const url = options.url || false;
         const method = options.method || false;
-        const data = options || false;
+        const data = options.data || false;
         const config = {
             method: method,
             url: url
