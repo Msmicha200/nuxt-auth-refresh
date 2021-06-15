@@ -9,6 +9,12 @@ export default class Auth {
     options = {};
     prefix = null;
     isGlobalToken = false;
+    referenceState = {
+        user: null,
+        loggedIn: false,
+        token: null,
+        refreshToken: null,
+    };
 
     constructor(ctx, options) {
         this.ctx = ctx;
@@ -21,12 +27,7 @@ export default class Auth {
         }
         
         for (const option in options.strategies) {
-            this.state[option] = {
-                user: null,
-                loggedIn: false,
-                token: null,
-                refreshToken: null,
-            };
+            this.state[option] = this.referenceState;
 
             this.options[option].refresh = options.strategies[option]?.refresh === true ? true : false;
             this.options[option].userAutoFetch = options.strategies[option].userAutoFetch === true ? true : false;
@@ -121,7 +122,7 @@ export default class Auth {
         const redirects = this.options[scheme_name]?.redirects;
         
         if (redirects) {
-            if ('home' in redirects && redirects['home'] != false) {
+            if ('home' in redirects && redirects.home != false) {
                 return this.ctx.redirect(redirects.home);
             }
         }
@@ -134,10 +135,41 @@ export default class Auth {
     }
 
     /**
-     * @param  {String} scheme_name Strategie title to logout
+     * @param {String} scheme_name Strategie title to logout
+     * @returns {Boolean} Returns true if logout is successful or redirect if provided logout page 
      */
     logOut(scheme_name) {
-        
+        this.removeCookie(`${this.prefix}.${scheme_name}.token`);
+
+        if (this.isRefreshable(scheme_name)) {
+            this.removeCookie(`${this.prefix}.${scheme_name}.refreshToken`);
+        }
+
+        this.state[scheme_name] = this.referenceState;
+
+        const redirects = this.options[scheme_name]?.redirects;
+        console.log(redirects);
+
+        if (redirects) {
+            if ('logout' in redirects && redirects.logout != false) {
+                console.log(111);
+                return this.ctx.redirect(redirects.logout);
+            }
+        }
+
+        return true;
+    }
+    
+    /**
+     * @param  {String} key Title of cookie to remove.
+     * @param  {Object} options Cookie options.
+     */
+    removeCookie(key, options) {
+        options = {
+            maxAge: -1
+        }
+
+        this.setCookie(key, void 0, options);
     }
 
     /**
@@ -206,6 +238,8 @@ export default class Auth {
      * @returns {Boolean} Returns true if provided token is expired.
      */
     isExpired(token) {
+        // console.log(token)
+        // return;
         const token_obj = jwt(token);
         
         if ('exp' in token_obj) {
