@@ -5,33 +5,40 @@ import jwt from 'jwt-decode';
 
 export default class Auth {
     state = {};
-    ctx = {};
+    #ctx = {};
     options = {};
-    prefix = null;
-    isGlobalToken = false;
-    referenceState = {
+    #prefix = null;
+    #isGlobalToken = false;
+    checkRefreshInterval = null;
+    #referenceState = {
         user: null,
         loggedIn: false,
         token: null,
         refreshToken: null,
+        strategieName: null
     };
 
     constructor(ctx, options) {
-        this.ctx = ctx;
+        this.#ctx = ctx;
         this.options = options?.strategies;
-        this.prefix = options.prefix ? options.prefix : 'auth';
-        this.isGlobalToken = options.globalToken === true ? true : false; 
+        this.#prefix = options.prefix ? options.prefix : 'auth';
+        this.#isGlobalToken = options.globalToken === true ? true : false; 
+        this.checkRefreshInterval = isNaN(Number(options.checkRefreshInterval)) ?
+            (60 * 1000) : (options.checkRefreshInterval * 1000);
 
         if (!this.options) {
             return Promise.reject('Please, provide strategies');
         }
-        
+
+        this.state = Object.assign({}, this.#referenceState);
+
         for (const option in options.strategies) {
-            this.state[option] = this.referenceState;
 
             this.options[option].refresh = options.strategies[option]?.refresh === true ? true : false;
             this.options[option].userAutoFetch = options.strategies[option].userAutoFetch === true ? true : false;
+            this.options[option].autoRefresh = options.strategies[option]?.autoRefresh ? true : false;
         }
+
 
         this.state = new Vue({
             data: this.state
@@ -41,23 +48,23 @@ export default class Auth {
     }
     
     // Review
+    // TODO:: Default value for accessTokenProperty 
     init() {
         const cookies = this.getCookies();
 
         for (const cookie_key in cookies) {
             const array = cookie_key.split('.');
-
-            if (array.length === 3 && array[0] === this.prefix) {
+            
+            if (array.length === 3 && array[0] === this.#prefix) {
                 const token = cookies[array.join('.')];
 
-                if (array[1] in this.state) {
-                    if (this.isExpired(token)) {
-                        // 
-                    }
-
-                    this.state[array[1]][array[2]] = token;
-                    this.state[array[1]].loggedIn = true;
+                if (this.isExpired(token)) {
+                    
                 }
+                
+                this.state[array[2]] = token;
+                this.state.strategieName = array[1];
+                this.state.loggedIn = true;
             }
         }
     }
@@ -101,9 +108,15 @@ export default class Auth {
             return Promise.reject('Received token is expired');
         }
 
-        this.state[scheme_name].token = result.data[endpoint.tokenProperty];
-        this.state[scheme_name].loggedIn = true;
-        this.setCookie(`${this.prefix}.${scheme_name}.token`, result.data[endpoint.tokenProperty]);
+        if (this.state.loggedIn) {
+            this.logOut(false);
+            console.log('logged out')
+        }
+
+        this.state.token = result.data[endpoint.tokenProperty];
+        this.state.loggedIn = true;
+        this.state.strategieName = scheme_name;
+        this.setCookie(`${this.#prefix}.${scheme_name}.token`, result.data[endpoint.tokenProperty]);
 
         if (this.isRefreshable(scheme_name)) {
             if (!(refreshEndpoint.tokenProperty in result.data)) {
@@ -114,8 +127,8 @@ export default class Auth {
                 return Promise.reject('Received refresh token is expired');
             }
 
-            this.state[scheme_name].refreshToken = result.data[refreshEndpoint.tokenProperty];
-            this.setCookie(`${this.prefix}.${scheme_name}.refreshToken`, 
+            this.state.refreshToken = result.data[refreshEndpoint.tokenProperty];
+            this.setCookie(`${this.#prefix}.${scheme_name}.refreshToken`, 
                 result.data[refreshEndpoint.tokenProperty]);
         }
 
@@ -123,37 +136,41 @@ export default class Auth {
         
         if (redirects) {
             if ('home' in redirects && redirects.home != false) {
-                return this.ctx.redirect(redirects.home);
+                return this.#ctx.redirect(redirects.home);
             }
         }
 
-        if (this.options[scheme_name].userAutoFetch) {
-            this.fetchUser(scheme_name);
+        if (this.options[scheme_name].userAutoFetch === true) {
+            this.fetchUser();
         }
 
         return Promise.resolve(result);
     }
 
     /**
-     * @param {String} scheme_name Strategie title to logout
-     * @returns {Boolean} Returns true if logout is successful or redirect if provided logout page 
+     * @param {Boolean} [withRedirect=true] Pass false if want to logout user without redirects.
+     * @returns {Boolean} Returns true if logout is successful or redirect if provided logout page.
      */
-    logOut(scheme_name) {
-        this.removeCookie(`${this.prefix}.${scheme_name}.token`);
+    logOut(withRedirect = true) {
+        if (!this.state.loggedIn) {
+            return Promise.reject('You are not logged in');
+        }
+        
+        const scheme_name = this.state.strategieName;
+
+        this.removeCookie(`${this.#prefix}.${scheme_name}.token`);
 
         if (this.isRefreshable(scheme_name)) {
-            this.removeCookie(`${this.prefix}.${scheme_name}.refreshToken`);
+            this.removeCookie(`${this.#prefix}.${scheme_name}.refreshToken`);
         }
-
-        this.state[scheme_name] = this.referenceState;
+        
+        this.state = Object.assign({}, this.#referenceState);
 
         const redirects = this.options[scheme_name]?.redirects;
-        console.log(redirects);
 
-        if (redirects) {
+        if (redirects && withRedirect) {
             if ('logout' in redirects && redirects.logout != false) {
-                console.log(111);
-                return this.ctx.redirect(redirects.logout);
+                return this.#ctx.redirect(redirects.logout);
             }
         }
 
@@ -173,11 +190,14 @@ export default class Auth {
     }
 
     /**
-     * @param  {String} scheme_name Strategie title to fetch user.
      * @returns {Promise} Promise object represents the result of fetch user.
      */
-    async fetchUser(scheme_name) {
-        const user_endpoint = this.options[scheme_name].endpoints?.user;
+    async fetchUser() {
+        if (!this.state.loggedIn) {
+            return Promise.reject('You are not logged in');
+        }
+
+        const user_endpoint = this.options[this.state.strategieName].endpoints?.user;
         
         if (!user_endpoint) {
             return Promise.reject('Please provide user endpoint');
@@ -200,9 +220,49 @@ export default class Auth {
             return Promise.resolve(user);
         }
 
-        this.state[scheme_name].user = user.data[user_endpoint.property];
+        this.state.user = user.data[user_endpoint.property];
 
         return Promise.resolve(user);
+    }
+
+    async refreshToken() {
+        if (!this.state.loggedIn) {
+            return Promise.reject('You are not logged in');
+        }
+
+        const scheme_name = this.state.strategieName;
+        
+        if (!this.isRefreshable(scheme_name)) {
+            return Promise.reject('Current strategie is not refreshable');
+        }
+
+        if (this.isExpired(this.state.refreshToken)) {
+            return Promise.reject('Refresh token is expired');
+        }
+
+        if (!this.state.refreshToken) {
+            return Promise.reject('Current strategie does not have refresh token.')
+        }
+
+        const refreshEndpoint = this.options[scheme_name].endpoints.refresh;
+        
+        const result = await this.request({
+            url: refreshEndpoint.url,
+            method: refreshEndpoint.method || 'POST'
+        });
+
+        if (!(refreshEndpoint.accessTokenProperty in result.data)) {
+            return Promise.reject('Please provide new access token property in response');
+        }
+
+        if (this.isExpired(result.data[refreshEndpoint.accessTokenProperty])) {
+            return Promise.reject('Received token is expired');
+        }
+
+        this.state.token = result.data[refreshEndpoint.accessTokenProperty];
+        this.setCookie(`${this.#prefix}.${scheme_name}.token`, result.data[refreshEndpoint.accessTokenProperty]);
+
+        return true;
     }
 
     /**
@@ -229,7 +289,7 @@ export default class Auth {
         if (!this.options[scheme_name].endpoints.refresh.tokenProperty) {
             return Promise.reject('Please provide refresh endpoint token property');
         }
-        
+
         return true;
     }
     
@@ -238,8 +298,6 @@ export default class Auth {
      * @returns {Boolean} Returns true if provided token is expired.
      */
     isExpired(token) {
-        // console.log(token)
-        // return;
         const token_obj = jwt(token);
         
         if ('exp' in token_obj) {
@@ -265,13 +323,13 @@ export default class Auth {
         if (process.client) {
             document.cookie = serialized_cookie;
         }
-        else if (process.server && this.ctx.res) {
-            const cookies = this.ctx.res.getHeader('Set-Cookie') || [];
+        else if (process.server && this.#ctx.res) {
+            const cookies = this.#ctx.res.getHeader('Set-Cookie') || [];
 
             cookies.unshift(serialized_cookie);
 
-            this.ctx.res.setHeader('Set-Cookie', serialized_cookie);
-            // this.ctx.res.setHeader('Set-Cookie', cookies.filter((elem, idx, arr) =>
+            this.#ctx.res.setHeader('Set-Cookie', serialized_cookie);
+            // this.#ctx.res.setHeader('Set-Cookie', cookies.filter((elem, idx, arr) =>
                 // arr.findIndex(val => val.startsWith(elem.substr(0, elem.indexOf('=')))) === idx));
         }
         else {
@@ -283,7 +341,7 @@ export default class Auth {
      * @returns {Object} Returns all cookies.
      */
     getCookies() {
-        const cookie_str = process.client ? document.cookie : this.ctx.req.headers.cookie;
+        const cookie_str = process.client ? document.cookie : this.#ctx.req.headers.cookie;
 
         return cookie.parse(cookie_str || '');
     }
@@ -309,7 +367,7 @@ export default class Auth {
         }
 
         if (method && url) {
-            return this.ctx.app.$axios(config);
+            return this.#ctx.app.$axios(config);
         }
         else {
             return Promise.resolve(false);
